@@ -1,0 +1,346 @@
+set sql_safe_updates=0;
+
+-- After the table has been created and the data imported
+
+
+										-- DATA CHECKS
+
+-- Checking if the there are null values in the data
+
+select *
+from retail_data_2010_2011
+where invoice is null
+or	stockcode is null
+or	description is null
+or	quantity is null
+or	invoice_date is null
+or	price is null
+or	customer_id is null
+or	country is null
+or	hour_sale is null;
+
+-- Checking for Duplicates
+
+select
+	invoice,customer_id,stockcode,description,quantity,invoice_date,price,country,hour_sale,
+	count(*)
+from
+	retail_data_2010_2011
+where invoice !=0
+group by
+	invoice,customer_id,stockcode,description,quantity,invoice_date,price,country,hour_sale
+having count(*) > 1;
+
+-- Creating a Temporary table full of non-duplicates 
+
+create temporary table  retail_temp as 
+select distinct *
+from retail_data_2010_2011;
+
+select * from retail_temp;
+
+-- Checking if data makes sense
+
+-- Checking for negatives in the data
+
+select *
+from retail_temp
+where invoice<0
+or customer_id<0
+or quantity<0
+or invoice_date<0
+or price<0
+or hour_sale<0;
+
+-- Converting all the negative quantities to positive and creating a temporary table
+
+create temporary table retail_temp2 as 
+select invoice,stockcode,description,invoice_date,customer_id,country,hour_sale,
+		if(quantity<0,quantity*-1,quantity) as quantity
+        
+from retail_temp;
+
+select *
+from retail_temp2
+where invoice=0;
+
+-- Dealing  with negative price from the table
+
+delete from retail_temp2 where price < 0;
+
+select  *
+from retail_temp2
+where price<0;
+
+-- Removing the time format after date
+
+create temporary table retail_temp3 as
+select 
+	invoice,stockcode,description,
+	date_format(invoice_date,'%Y-%m-%d') as invoice_date, hour_sale,customer_id,country,price,quantity
+from
+	retail_temp2;
+    
+
+-- Creating and Inserting the cleaned data into a fresh table
+
+drop table if exists retail_cleaned_2010_2011;
+create table retail_cleaned_2010_2011  (
+	invoice int,
+    stockcode varchar(20),
+    description varchar(100),
+    invoice_date date,
+    hour_sale time,
+    
+    customer_id int,
+    country varchar(20),
+    price float,
+    quantity int);
+
+select * from retail_temp3;
+
+insert into retail_cleaned_2010_2011 
+select * from retail_temp3;
+
+select * from retail_cleaned_2010_2011;
+
+										-- DATA ANALYSIS
+
+-- -- Sales Trends
+
+-- Daily sales trends
+
+select
+	invoice_date,
+    round(sum(price*quantity),0) as total_sales
+from
+	retail_cleaned_2010_2011
+group by 
+	invoice_date
+order by 
+	total_sales desc;
+
+-- Monthly Sales trends
+
+select
+	case
+		when month(invoice_date)=1 then 'January'
+    when month(invoice_date)=2 then 'Febuary'
+    when month(invoice_date)=3 then 'March'
+    when month(invoice_date)=4 then 'April'
+		when month(invoice_date)=5 then 'May'
+		when month(invoice_date)=6 then 'June'
+		when month(invoice_date)=7 then 'July'
+		when month(invoice_date)=8 then 'August' 
+		when month(invoice_date)=9 then 'September'
+		when month(invoice_date)=10 then 'October'
+		when month(invoice_date)=11 then 'November'
+		when month(invoice_date)=12 then 'December' 
+		
+	end as month,
+         
+    round(sum(price*quantity),0) as monthly_total_sales
+from
+	retail_cleaned_2010_2011
+group by
+	month
+order by 
+	monthly_total_sales desc;
+
+-- Finding what day of the week we have the highest sales
+select
+	case
+		when dayofweek(invoice_date)=1 then 'Sunday'
+    when dayofweek(invoice_date)=2 then 'Monday'
+    when dayofweek(invoice_date)=3 then 'Tuesday'
+    when dayofweek(invoice_date)=4 then 'Wenesday'
+    when dayofweek(invoice_date)=5 then 'Thursday'
+    when dayofweek(invoice_date)=6 then 'Friday'
+    when dayofweek(invoice_date)=7 then 'Saturday'
+	end as day_of_the_week,
+    round(sum(price*quantity),0) as total_sales_per_day_of_the_week
+from
+	retail_cleaned_2010_2011
+group by
+	day_of_the_week
+order by 
+	total_sales_per_day_of_the_week desc;
+    
+  
+  
+
+-- CUSTOMER TRENDS
+select * from retail_cleaned_2010_2011 where customer_id !=0 order by invoice_date;
+
+-- 1. Frequent Buyers
+
+--Compares customer ids returns 1 if they are different Helps us find the number of times a customer cameback
+
+with unique_cte as ( 
+  select
+  	invoice,stockcode,description,invoice_date,customer_id,country,price,quantity,
+    if(lag(customer_id)over(partition by invoice_date)!=customer_id,1,0) as unique_customers
+  from retail_cleaned_2010_2011
+  where customer_id !=0
+  order by invoice_date)
+
+select
+	customer_id,
+  sum(unique_customers) as number_of_times_they_cameback
+from
+	unique_cte
+group by customer_id
+order by number_of_times_they_cameback desc;
+
+
+-- 2. High value customers
+select
+	customer_id,
+  round(sum(quantity*price),0) as total_money_spent
+from
+	retail_cleaned_2010_2011
+where customer_id!=0
+group by customer_id
+order by total_money_spent desc;
+	
+
+-- 3. How often repeat customer make repeat purchases
+
+--Calculates the Number of people that cameback a number of times
+
+with count_unique as (
+
+--Calculates how many times a customer cameback
+
+with unique_cte as ( 
+select
+	invoice,stockcode,description,invoice_date,customer_id,country,price,quantity,
+  if(lag(customer_id)over(partition by invoice_date)!=customer_id,1,0) as unique_customers  
+from retail_cleaned_2010_2011
+where customer_id !=0
+
+order by invoice_date)
+
+select
+	customer_id,sum(unique_customers) as number_of_times_they_cameback
+from
+	unique_cte
+group by customer_id)
+
+
+select
+	number_of_times_they_cameback,
+  count(number_of_times_they_cameback) as number_of_people_cameback_this_many_times
+from count_unique
+group by number_of_times_they_cameback
+order by number_of_times_they_cameback ;
+
+
+	
+
+
+-- 4. Average basket or average value of a transaction
+
+-- Calculates the total sales per invoice
+
+  with total_sale_cte as (
+select
+	invoice,
+  sum(price*quantity) as total_sales_per_invoice
+from retail_cleaned_2010_2011
+where invoice!=0
+group by invoice
+)
+
+select
+	avg(total_sales_per_invoice) as average_value_per_transaction
+from total_sale_cte;
+
+
+--   INVENTORY MANAGEMENT
+select * from retail_cleaned_2010_2011 order by quantity desc ;
+
+-- 1  Which products get sold alot
+select
+	stockcode,description,
+  sum(quantity) as total_quantity_sold
+from retail_cleaned_2010_2011
+where price !=0
+group by stockcode,description
+order by total_quantity_sold desc;
+
+-- What are the least bought products
+select
+	stockcode,description,
+  sum(quantity) as total_quantity_sold
+from retail_cleaned_2010_2011
+where price !=0
+group by stockcode,description
+order by total_quantity_sold;
+
+-- 4 Customer Segmentation:
+
+select * from retail_cleaned_2010_2011 where customer_id!=0 order by invoice_date;
+
+
+-- -- Where are our biggest spenders from
+select
+	country,
+	customer_id,
+  round(sum(price*quantity),0) as total_money_spent
+from retail_cleaned_2010_2011
+where customer_id !=0
+group by country,customer_id
+order by total_money_spent desc;
+
+-- Countries with the highest customers to money spent ratio
+
+select
+  country,
+  round(sum(quantity*price),0) as amount_money_spent,
+  count(distinct customer_id) as number_of_customers,
+  round(round(sum(quantity*price),0)/ count(distinct customer_id),0) as money_spent_by_a_person    
+from retail_cleaned_2010_2011
+where customer_id!=0
+group by country
+order by money_spent_by_a_person desc;
+
+-- Countries where the most customers come from
+
+select
+	country,
+    count(distinct customer_id) as number_of_customers
+from retail_cleaned_2010_2011
+where customer_id !=0
+group by country
+order by number_of_customers desc;
+
+-- What are the key characteristics of the highest-value customers?
+
+-- This returns the customer ids of the people who spent the most which we use to find what they buy the most
+create view chara as 
+select
+	customer_id
+from retail_cleaned_2010_2011
+where customer_id!=0
+group by customer_id
+order by round(sum(price*quantity),0) desc
+limit 10;
+
+-- Stock the 10 highest value customers order
+select stockcode,description
+from retail_cleaned_2010_2011
+where customer_id in (select * from chara)
+group by stockcode,description;
+
+-- Store Operations:
+select * from retail_cleaned_2010_2011 where customer_id !=0 and invoice!=0;
+-- What times of day  see the highest footfall?
+select 
+	hour(hour_sale) as hour_of_day,
+    count(distinct customer_id) as number_of_customers
+from retail_cleaned_2010_2011
+group by hour(hour_sale)
+order by number_of_customers desc;
+
+
